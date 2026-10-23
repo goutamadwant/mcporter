@@ -218,6 +218,59 @@ describe('OAuth refresh across fresh built-artifact processes', () => {
     budget(20_000)
   );
 
+  it(
+    'reuses header-advertised protected resource metadata during silent refresh',
+    async () => {
+      const resourceRequests: string[] = [];
+      const resourceServer = createServer((request, response) => {
+        const origin = `http://127.0.0.1:${(resourceServer.address() as AddressInfo).port}`;
+        const url = new URL(request.url ?? '/', origin);
+        resourceRequests.push(url.pathname);
+        if (url.pathname === '/v2/server/mcp/.well-known/oauth-protected-resource') {
+          return sendJson(response, {
+            resource: `${origin}/v2/server/mcp`,
+            authorization_servers: [authOrigin],
+          });
+        }
+        response.statusCode = 404;
+        response.end('not found');
+      });
+      await new Promise<void>((resolve, reject) => {
+        resourceServer.once('error', reject);
+        resourceServer.listen(0, '127.0.0.1', resolve);
+      });
+
+      try {
+        const resourceOrigin = `http://127.0.0.1:${(resourceServer.address() as AddressInfo).port}`;
+        const resourceEndpoint = `${resourceOrigin}/v2/server/mcp`;
+        const metadataUrl = `${resourceEndpoint}/.well-known/oauth-protected-resource`;
+        const seed = 'header-only-seed';
+        registerSeed(seed, 'header-only');
+        const env = await freshEnv('header-only-discovery', seed);
+        env.MCPORTER_TEST_OAUTH_ENDPOINT = resourceEndpoint;
+        env.MCPORTER_TEST_OAUTH_ISSUER = authOrigin;
+        env.MCPORTER_TEST_OAUTH_RESOURCE_METADATA_URL = metadataUrl;
+
+        await runFixture('seed', env);
+        const result = JSON.parse(await runFixture('refresh-cached', env)) as {
+          accessMarker: string;
+          persistedAccessMarker: string;
+          persistedRefreshMarker: string;
+        };
+
+        expect(result.accessMarker).toBe(marker('access-header-only-1'));
+        expect(result.persistedAccessMarker).toBe(marker('access-header-only-1'));
+        expect(result.persistedRefreshMarker).toBe(marker('rotated-header-only-1'));
+        expect(resourceRequests).toEqual([metadataUrl.slice(resourceOrigin.length)]);
+        expect(tokenRequests).toHaveLength(1);
+        expect(tokenRequests[0]?.get('refresh_token')).toBe(seed);
+      } finally {
+        await new Promise<void>((resolve) => resourceServer.close(() => resolve()));
+      }
+    },
+    budget(20_000)
+  );
+
   for (const variant of [
     { action: 'refresh-cached', label: 'cached-read path' },
     { action: 'refresh-connect', label: 'provider path' },

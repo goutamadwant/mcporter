@@ -18,6 +18,8 @@ const markerKeyBytes = Buffer.from(markerKey, 'hex');
 
 const serverName = process.env.MCPORTER_TEST_OAUTH_SERVER_NAME ?? 'oauth-refresh-process';
 const seedRefreshToken = process.env.MCPORTER_TEST_OAUTH_SEED_REFRESH ?? 'fresh-process-refresh-token';
+const seedIssuer = process.env.MCPORTER_TEST_OAUTH_ISSUER;
+const resourceMetadataUrl = process.env.MCPORTER_TEST_OAUTH_RESOURCE_METADATA_URL;
 
 const definition = {
   name: serverName,
@@ -49,13 +51,21 @@ if (action === 'seed') {
     client_id: 'fresh-process-client',
     redirect_uris: ['http://127.0.0.1:41000/callback'],
     token_endpoint_auth_method: 'none',
+    ...(seedIssuer ? { issuer: seedIssuer } : {}),
   });
   await persistence.saveTokens({
     access_token: 'expired-process-token',
     token_type: 'Bearer',
     refresh_token: seedRefreshToken,
     expires_at: 1,
+    ...(seedIssuer ? { issuer: seedIssuer } : {}),
   });
+  if (resourceMetadataUrl) {
+    await persistence.saveDiscoveryState({
+      resourceMetadataUrl,
+      ...(seedIssuer ? { authorizationServerUrl: seedIssuer } : {}),
+    });
+  }
   emit({ seeded: true, refreshMarker: marker(seedRefreshToken) });
 } else if (action === 'seed-post-401') {
   const persistence = await buildOAuthPersistence(definition, logger);
